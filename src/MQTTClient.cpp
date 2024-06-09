@@ -178,24 +178,37 @@ bool MQTTClient::sendSubscribePacket(const char* topic, QoS qos) {
 }
 
 void MQTTClient::handlePacket() {
-    uint8_t packetType = wifiClient.read();
-    if (packetType == 0x30) {  // Publish packet
-        uint8_t length = wifiClient.read();
-        char topic[length + 1];
-        wifiClient.readBytes(topic, length);
-        topic[length] = '\0';
-        uint8_t messageLength = wifiClient.read();
-        char message[messageLength + 1];
-        wifiClient.readBytes(message, messageLength);
-        message[messageLength] = '\0';
+    if (wifiClient.available() > 0) {
+        uint8_t packetType = wifiClient.read();
 
-        if (callback) {
-            callback(topic, message);
+        if (packetType == 0x30) {  // Publish packet
+            uint8_t length = wifiClient.read();
+            uint8_t remainingLength = length;
+
+            // Read topic length
+            uint16_t topicLength = (wifiClient.read() << 8) | wifiClient.read();
+            remainingLength -= 2;
+
+            // Read topic
+            char topic[topicLength + 1];
+            wifiClient.readBytes(topic, topicLength);
+            topic[topicLength] = '\0';
+            remainingLength -= topicLength;
+
+            // Read message
+            char message[remainingLength + 1];
+            wifiClient.readBytes(message, remainingLength);
+            message[remainingLength] = '\0';
+
+            if (callback) {
+                callback(topic, message);
+            }
+        } else if (packetType == 0x40 || packetType == 0x50) {  // PUBACK or PUBREC
+            processAckPacket();
         }
-    } else if (packetType == 0x40 || packetType == 0x50) {  // PUBACK or PUBREC
-        processAckPacket();
     }
 }
+
 
 void MQTTClient::processAckPacket() {
     uint8_t packetIdentifierBytes[2];
