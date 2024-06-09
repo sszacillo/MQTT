@@ -14,23 +14,13 @@ const int mqtt_port = 1883;
 // Pin for the button
 const int buttonPin = 4;
 
-WiFiClient wifiClient;
-MQTTClient mqttClient(wifiClient, mqtt_server, mqtt_port);
+MQTTClient mqttClient(mqtt_server, mqtt_port);
 
-bool connectToMQTT() {
-    Serial.print("Connecting to MQTT server: ");
-    Serial.print(mqtt_server);
-    Serial.print(":");
-    Serial.println(mqtt_port);
-
-    if (mqttClient.connect("ESP32Client")) {
-        Serial.println("Connected to MQTT server");
-        mqttClient.subscribe("test/topic");
-        return true;
-    } else {
-        Serial.println("Failed to connect to MQTT server");
-        return false;
-    }
+void messageReceived(const std::string& topic, const std::string& payload) {
+    Serial.print("Message received on topic: ");
+    Serial.print(topic.c_str());
+    Serial.print(". Payload: ");
+    Serial.println(payload.c_str());
 }
 
 void setup() {
@@ -40,12 +30,13 @@ void setup() {
     WiFiManager wifiManager(ssid, password);
     wifiManager.connect();
 
-    Serial.print("WiFi status: ");
-    Serial.println(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
-
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Attempting to connect to MQTT server...");
-        if (!connectToMQTT()) {
+        Serial.println("WiFi connected");
+        if (mqttClient.connect("ESP32Client")) {
+            Serial.println("Connected to MQTT server");
+            mqttClient.subscribe("test/topic", 1); // Subskrybuj z QoS 1
+            mqttClient.setMessageCallback(messageReceived);
+        } else {
             Serial.println("Failed to connect to MQTT server");
         }
     } else {
@@ -57,7 +48,7 @@ void loop() {
     mqttClient.loop();
 
     if (digitalRead(buttonPin) == HIGH) {
-        if (mqttClient.publish("test/topic", "Button pressed")) {
+        if (mqttClient.publish("test/topic", "Button pressed", 1, true)) { // Publikuj z QoS 1 i retained flag
             Serial.println("Button pressed, message sent");
         } else {
             Serial.println("Failed to send message");

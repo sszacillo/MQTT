@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <Arduino.h>
 
-WiFiManager::WiFiManager(const char* ssid, const char* password) 
+WiFiManager::WiFiManager(const char* ssid, const char* password)
     : ssid(ssid), password(password) {}
 
 void WiFiManager::connect() {

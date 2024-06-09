@@ -1,71 +1,25 @@
 #include "MQTTClient.h"
 #include <Arduino.h>
-#include <WiFi.h>
 
-MQTTClient::MQTTClient(WiFiClient& client, const char* server, uint16_t port)
-    : wifiClient(client), server(server), port(port), callback(nullptr), packetIdentifier(0) {}
-
-void MQTTClient::setCallback(void (*callback)(char*, byte*, unsigned int)) {
-    this->callback = callback;
-}
-
-bool MQTTClient::mqttPing() {
-    Serial.println("Sending PINGREQ to MQTT server");
-    uint8_t pingReqPacket[] = {0xC0, 0x00};  // PINGREQ packet
-    if (wifiClient.write(pingReqPacket, sizeof(pingReqPacket)) != sizeof(pingReqPacket)) {
-        Serial.println("Failed to send PINGREQ packet");
-        return false;
-    }
-
-    // Wait for PINGRESP
-    delay(1000);  // Wait for response
-    if (wifiClient.available() > 0) {
-        uint8_t response[2];
-        wifiClient.read(response, 2);
-        Serial.print("Received response: ");
-        for (int i = 0; i < 2; i++) {
-            Serial.print(response[i], HEX);
-            Serial.print(" ");
-        }
-        Serial.println();
-        return response[0] == 0xD0 && response[1] == 0x00;  // Check PINGRESP packet
-    } else {
-        Serial.println("Failed to receive PINGRESP from MQTT server");
-        return false;
-    }
-}
+MQTTClient::MQTTClient(const char* server, uint16_t port)
+    : server(server), port(port), packetIdentifier(0), keepAlive(60), lastPingTime(0) {}
 
 bool MQTTClient::connect(const char* clientID) {
     Serial.print("Connecting to MQTT server: ");
-    Serial.print(server);
+    Serial.print(server.c_str());
     Serial.print(":");
     Serial.println(port);
 
-    // Check if the device is connected to the WiFi network
-    Serial.print("WiFi status: ");
-    Serial.println(WiFi.status());
-
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi connection failed");
-        return false;
-    }
-
-    // Attempt to connect to the MQTT server
-    if (!wifiClient.connect(server, port)) {
+    if (!wifiClient.connect(server.c_str(), port)) {
         Serial.println("Connection to MQTT server failed");
         return false;
-    } else {
-        Serial.println("Connected to MQTT server");
     }
 
     if (!sendConnectPacket(clientID)) {
         Serial.println("Failed to send CONNECT packet");
         return false;
-    } else {
-        Serial.println("CONNECT packet sent successfully");
     }
 
-    // Wait for CONNACK
     delay(1000);  // Wait for response
     if (wifiClient.available() > 0) {
         uint8_t response[4];
@@ -77,26 +31,49 @@ bool MQTTClient::connect(const char* clientID) {
         }
         Serial.println();
 
-        return response[0] == 0x20 && response[1] == 0x02 && response[3] == 0x00;  // Check CONNACK packet
-    } else {
-        Serial.println("No response to CONNECT packet");
+        if (response[0] == 0x20 && response[1] == 0x02 && response[3] == 0x00) {  // Check CONNACK packet
+            lastPingTime = millis();
+            return true;
+        }
     }
 
+    Serial.println("No response to CONNECT packet");
     return false;
 }
 
+void MQTTClient::disconnect() {
+    wifiClient.stop();
+    Serial.println("Disconnected from MQTT server");
+}
+
 void MQTTClient::loop() {
-    if (wifiClient.available()) {
+    if (wifiClient.available() > 0) {
         handlePacket();
+    }
+    if (millis() - lastPingTime >= keepAlive * 1000) {
+        if (!mqttPing()) {
+            Serial.println("MQTT connection lost, reconnecting...");
+            connect("ESP32Client");
+        } else {
+            lastPingTime = millis();
+        }
     }
 }
 
-bool MQTTClient::publish(const char* topic, const char* message) {
-    return sendPublishPacket(topic, message);
+bool MQTTClient::publish(const char* topic, const char* message, QoS qos, bool retained) {
+    return sendPublishPacket(topic, message, qos, retained);
 }
 
-bool MQTTClient::subscribe(const char* topic) {
-    return sendSubscribePacket(topic);
+bool MQTTClient::subscribe(const char* topic, QoS qos) {
+    return sendSubscribePacket(topic, qos);
+}
+
+void MQTTClient::setMessageCallback(MessageCallback callback) {
+    this->callback = callback;
+}
+
+void MQTTClient::setKeepAlive(uint16_t keepAlive) {
+    this->keepAlive = keepAlive;
 }
 
 bool MQTTClient::sendConnectPacket(const char* clientID) {
@@ -105,10 +82,9 @@ bool MQTTClient::sendConnectPacket(const char* clientID) {
     uint8_t protocolName[] = {0x00, 0x04, 'M', 'Q', 'T', 'T'};
     uint8_t protocolLevel = 0x04;
     uint8_t connectFlags = 0x02;  // Clean session
-    uint16_t keepAlive = 60;
     uint16_t clientIDLength = strlen(clientID);
 
-    uint8_t packet[10 + clientIDLength];
+    uint8_t packet[12 + clientIDLength];
     uint8_t packetIndex = 0;
 
     packet[packetIndex++] = 0x10;  // CONNECT packet type
@@ -141,7 +117,7 @@ bool MQTTClient::sendConnectPacket(const char* clientID) {
     return true;
 }
 
-bool MQTTClient::sendPublishPacket(const char* topic, const char* message) {
+bool MQTTClient::sendPublishPacket(const char* topic, const char* message, QoS qos, bool retained) {
     Serial.println("Sending PUBLISH packet");
 
     uint16_t topicLength = strlen(topic);
@@ -150,22 +126,32 @@ bool MQTTClient::sendPublishPacket(const char* topic, const char* message) {
     uint8_t packet[4 + topicLength + messageLength];
     uint8_t packetIndex = 0;
 
-    packet[packetIndex++] = 0x30;  // PUBLISH packet type
-    packet[packetIndex++] = topicLength + messageLength + 2;  // Remaining length
+    packet[packetIndex++] = 0x30 | (qos << 1) | retained;  // PUBLISH packet type with QoS and retained flag
+    packet[packetIndex++] = 0;  // Remaining length placeholder
 
     packet[packetIndex++] = (topicLength >> 8) & 0xFF;
     packet[packetIndex++] = topicLength & 0xFF;
     memcpy(&packet[packetIndex], topic, topicLength);
     packetIndex += topicLength;
+
+    if (qos > 0) {
+        packet[packetIndex++] = (packetIdentifier >> 8) & 0xFF;
+        packet[packetIndex++] = packetIdentifier & 0xFF;
+        pendingQoS1Messages[packetIdentifier] = message;
+        packetIdentifier++;
+    }
+
     memcpy(&packet[packetIndex], message, messageLength);
     packetIndex += messageLength;
+
+    packet[1] = packetIndex - 2;  // Update remaining length
 
     wifiClient.write(packet, packetIndex);
 
     return true;
 }
 
-bool MQTTClient::sendSubscribePacket(const char* topic) {
+bool MQTTClient::sendSubscribePacket(const char* topic, QoS qos) {
     Serial.println("Sending SUBSCRIBE packet");
 
     uint16_t topicLength = strlen(topic);
@@ -184,7 +170,7 @@ bool MQTTClient::sendSubscribePacket(const char* topic) {
     packet[packetIndex++] = topicLength & 0xFF;
     memcpy(&packet[packetIndex], topic, topicLength);
     packetIndex += topicLength;
-    packet[packetIndex++] = 0x00;  // QoS
+    packet[packetIndex++] = qos;  // QoS
 
     wifiClient.write(packet, packetIndex);
 
@@ -204,7 +190,46 @@ void MQTTClient::handlePacket() {
         message[messageLength] = '\0';
 
         if (callback) {
-            callback(topic, reinterpret_cast<byte*>(message), messageLength);
+            callback(topic, message);
         }
+    } else if (packetType == 0x40 || packetType == 0x50) {  // PUBACK or PUBREC
+        processAckPacket();
+    }
+}
+
+void MQTTClient::processAckPacket() {
+    uint8_t packetIdentifierBytes[2];
+    wifiClient.read(packetIdentifierBytes, 2);
+    uint16_t receivedPacketIdentifier = (packetIdentifierBytes[0] << 8) | packetIdentifierBytes[1];
+
+    Serial.print("Received ACK for packet ID: ");
+    Serial.println(receivedPacketIdentifier);
+
+    pendingQoS1Messages.erase(receivedPacketIdentifier);
+}
+
+bool MQTTClient::mqttPing() {
+    Serial.println("Sending PINGREQ to MQTT server");
+    uint8_t pingReqPacket[] = {0xC0, 0x00};  // PINGREQ packet
+    if (wifiClient.write(pingReqPacket, sizeof(pingReqPacket)) != sizeof(pingReqPacket)) {
+        Serial.println("Failed to send PINGREQ packet");
+        return false;
+    }
+
+    // Wait for PINGRESP
+    delay(1000);  // Wait for response
+    if (wifiClient.available() > 0) {
+        uint8_t response[2];
+        wifiClient.read(response, 2);
+        Serial.print("Received response: ");
+        for (int i = 0; i < 2; i++) {
+            Serial.print(response[i], HEX);
+            Serial.print(" ");
+        }
+        Serial.println();
+        return response[0] == 0xD0 && response[1] == 0x00;  // Check PINGRESP packet
+    } else {
+        Serial.println("Failed to receive PINGRESP from MQTT server");
+        return false;
     }
 }
