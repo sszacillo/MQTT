@@ -1,23 +1,22 @@
-#ifndef MQTTCLIENT_H
-#define MQTTCLIENT_H
-
-#include <Arduino.h>
-#include <WiFiClient.h>
+#include <WiFi.h>
 
 class MQTTClient {
 public:
     MQTTClient(WiFiClient& client, const char* server, uint16_t port);
 
     void setCallback(void (*callback)(char*, byte*, unsigned int));
+
     bool connect(const char* clientID);
     void loop();
     bool publish(const char* topic, const char* message);
     bool subscribe(const char* topic);
 
+    bool mqttPing(); // Deklaracja metody mqttPing
+
 private:
+    WiFiClient& wifiClient;
     const char* server;
     uint16_t port;
-    WiFiClient& wifiClient;
     void (*callback)(char*, byte*, unsigned int);
     uint16_t packetIdentifier;
 
@@ -26,5 +25,3 @@ private:
     bool sendSubscribePacket(const char* topic);
     void handlePacket();
 };
-
-#endif

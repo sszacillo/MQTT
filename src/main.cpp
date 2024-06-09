@@ -17,40 +17,51 @@ const int buttonPin = 4;
 WiFiClient wifiClient;
 MQTTClient mqttClient(wifiClient, mqtt_server, mqtt_port);
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(buttonPin, INPUT);
+bool connectToMQTT() {
+    Serial.print("Connecting to MQTT server: ");
+    Serial.print(mqtt_server);
+    Serial.print(":");
+    Serial.println(mqtt_port);
 
-  WiFiManager wifiManager(ssid, password);
-  wifiManager.connect();
-
-  mqttClient.setCallback([](char* topic, byte* payload, unsigned int length) {
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("] ");
-    for (unsigned int i = 0; i < length; i++) {
-      Serial.print((char)payload[i]);
+    if (mqttClient.connect("ESP32Client")) {
+        Serial.println("Connected to MQTT server");
+        mqttClient.subscribe("test/topic");
+        return true;
+    } else {
+        Serial.println("Failed to connect to MQTT server");
+        return false;
     }
-    Serial.println();
-  });
+}
 
-  if (mqttClient.connect("ESP32Client-jack")) {
-    mqttClient.subscribe("test/topic");
-  } else {
-    Serial.println("Failed to connect to MQTT server");
-  }
+void setup() {
+    Serial.begin(115200);
+    pinMode(buttonPin, INPUT);
+
+    WiFiManager wifiManager(ssid, password);
+    wifiManager.connect();
+
+    Serial.print("WiFi status: ");
+    Serial.println(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Attempting to connect to MQTT server...");
+        if (!connectToMQTT()) {
+            Serial.println("Failed to connect to MQTT server");
+        }
+    } else {
+        Serial.println("Failed to connect to WiFi");
+    }
 }
 
 void loop() {
-  mqttClient.loop();
+    mqttClient.loop();
 
-  // Check if the button is pressed
-  if (digitalRead(buttonPin) == HIGH) {
-    if (mqttClient.publish("test/topic", "Button pressed")) {
-      Serial.println("Button pressed, message sent");
-    } else {
-      Serial.println("Failed to send message");
+    if (digitalRead(buttonPin) == HIGH) {
+        if (mqttClient.publish("test/topic", "Button pressed")) {
+            Serial.println("Button pressed, message sent");
+        } else {
+            Serial.println("Failed to send message");
+        }
+        delay(1000);  
     }
-    delay(1000);  // Debounce delay
-  }
 }
