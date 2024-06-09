@@ -1,20 +1,14 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include "WiFiManager.h"
 #include "MQTTClient.h"
-#include <WiFi.h>
 
-// WiFi credentials
-const char *ssid = "jack-spot";
-const char *password = "Jacek123";
+#define SSID "jack-spot"
+#define PASSWORD "Jacek123"
+#define MQTT_SERVER "192.168.45.188"
+#define MQTT_PORT 1883
 
-// MQTT Broker IP address
-const char* mqtt_server = "192.168.45.188";
-const int mqtt_port = 1883;
-
-// Pin for the button
-const int buttonPin = 4;
-
-MQTTClient mqttClient(mqtt_server, mqtt_port);
+MQTTClient mqttClient(MQTT_SERVER, MQTT_PORT);
 
 void messageReceived(const std::string& topic, const std::string& payload) {
     Serial.print("Message received on topic: ");
@@ -25,16 +19,14 @@ void messageReceived(const std::string& topic, const std::string& payload) {
 
 void setup() {
     Serial.begin(115200);
-    pinMode(buttonPin, INPUT);
 
-    WiFiManager wifiManager(ssid, password);
+    WiFiManager wifiManager(SSID, PASSWORD);
     wifiManager.connect();
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("WiFi connected");
         if (mqttClient.connect("ESP32Client")) {
             Serial.println("Connected to MQTT server");
-            mqttClient.subscribe("test/topic", 1); // Subskrybuj z QoS 1
+            mqttClient.subscribe("test/topic", 1); // Subscribe with QoS 1
             mqttClient.setMessageCallback(messageReceived);
         } else {
             Serial.println("Failed to connect to MQTT server");
@@ -42,17 +34,21 @@ void setup() {
     } else {
         Serial.println("Failed to connect to WiFi");
     }
+
+    Serial.println("Start entering your messages:");
 }
 
 void loop() {
     mqttClient.loop();
 
-    if (digitalRead(buttonPin) == HIGH) {
-        if (mqttClient.publish("test/topic", "Button pressed", 1, true)) { // Publikuj z QoS 1 i retained flag
-            Serial.println("Button pressed, message sent");
+    if (Serial.available() > 0) {
+        String message = Serial.readStringUntil('\n');
+        message.trim(); // Remove any trailing newline characters
+
+        if (mqttClient.publish("test/topic", message.c_str(), 1, true)) { // Publish with QoS 1 and retained flag
+            Serial.println("Message sent: " + message);
         } else {
             Serial.println("Failed to send message");
         }
-        delay(1000);  
     }
 }

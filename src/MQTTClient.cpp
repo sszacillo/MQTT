@@ -23,17 +23,18 @@ bool MQTTClient::connect(const char* clientID) {
     delay(1000);  // Wait for response
     if (wifiClient.available() > 0) {
         uint8_t response[4];
-        wifiClient.read(response, 4);
-        Serial.print("Received response: ");
-        for (int i = 0; i < 4; i++) {
-            Serial.print(response[i], HEX);
-            Serial.print(" ");
-        }
-        Serial.println();
+        if (wifiClient.read(response, 4) == 4) {
+            Serial.print("Received response: ");
+            for (int i = 0; i < 4; i++) {
+                Serial.print(response[i], HEX);
+                Serial.print(" ");
+            }
+            Serial.println();
 
-        if (response[0] == 0x20 && response[1] == 0x02 && response[3] == 0x00) {  // Check CONNACK packet
-            lastPingTime = millis();
-            return true;
+            if (response[0] == 0x20 && response[1] == 0x02 && response[3] == 0x00) {  // Check CONNACK packet
+                lastPingTime = millis();
+                return true;
+            }
         }
     }
 
@@ -180,28 +181,33 @@ bool MQTTClient::sendSubscribePacket(const char* topic, QoS qos) {
 void MQTTClient::handlePacket() {
     if (wifiClient.available() > 0) {
         uint8_t packetType = wifiClient.read();
-
         if (packetType == 0x30) {  // Publish packet
-            uint8_t length = wifiClient.read();
-            uint8_t remainingLength = length;
+            uint8_t remainingLength = wifiClient.read(); // Read the remaining length
 
-            // Read topic length
+            // Read the topic length
             uint16_t topicLength = (wifiClient.read() << 8) | wifiClient.read();
             remainingLength -= 2;
 
-            // Read topic
+            // Read the topic
             char topic[topicLength + 1];
-            wifiClient.readBytes(topic, topicLength);
+            if (wifiClient.readBytes(topic, topicLength) != topicLength) {
+                Serial.println("Failed to read topic");
+                return;
+            }
             topic[topicLength] = '\0';
             remainingLength -= topicLength;
 
-            // Read message
-            char message[remainingLength + 1];
-            wifiClient.readBytes(message, remainingLength);
-            message[remainingLength] = '\0';
+            // Read the payload
+            char payload[remainingLength + 1];
+            if (wifiClient.readBytes(payload, remainingLength) != remainingLength) {
+                Serial.println("Failed to read payload");
+                return;
+            }
+            payload[remainingLength] = '\0';
 
+            // Call the callback with the topic and payload
             if (callback) {
-                callback(topic, message);
+                callback(topic, payload);
             }
         } else if (packetType == 0x40 || packetType == 0x50) {  // PUBACK or PUBREC
             processAckPacket();
@@ -209,16 +215,16 @@ void MQTTClient::handlePacket() {
     }
 }
 
-
 void MQTTClient::processAckPacket() {
     uint8_t packetIdentifierBytes[2];
-    wifiClient.read(packetIdentifierBytes, 2);
-    uint16_t receivedPacketIdentifier = (packetIdentifierBytes[0] << 8) | packetIdentifierBytes[1];
+    if (wifiClient.read(packetIdentifierBytes, 2) == 2) {
+        uint16_t receivedPacketIdentifier = (packetIdentifierBytes[0] << 8) | packetIdentifierBytes[1];
 
-    Serial.print("Received ACK for packet ID: ");
-    Serial.println(receivedPacketIdentifier);
+        Serial.print("Received ACK for packet ID: ");
+        Serial.println(receivedPacketIdentifier);
 
-    pendingQoS1Messages.erase(receivedPacketIdentifier);
+        pendingQoS1Messages.erase(receivedPacketIdentifier);
+    }
 }
 
 bool MQTTClient::mqttPing() {
@@ -233,16 +239,16 @@ bool MQTTClient::mqttPing() {
     delay(1000);  // Wait for response
     if (wifiClient.available() > 0) {
         uint8_t response[2];
-        wifiClient.read(response, 2);
-        Serial.print("Received response: ");
-        for (int i = 0; i < 2; i++) {
-            Serial.print(response[i], HEX);
-            Serial.print(" ");
+        if (wifiClient.read(response, 2) == 2) {
+            Serial.print("Received response: ");
+            for (int i = 0; i < 2; i++) {
+                Serial.print(response[i], HEX);
+                Serial.print(" ");
+            }
+            Serial.println();
+            return response[0] == 0xD0 && response[1] == 0x00;  // Check PINGRESP packet
         }
-        Serial.println();
-        return response[0] == 0xD0 && response[1] == 0x00;  // Check PINGRESP packet
-    } else {
-        Serial.println("Failed to receive PINGRESP from MQTT server");
-        return false;
     }
+    Serial.println("Failed to receive PINGRESP from MQTT server");
+    return false;
 }
